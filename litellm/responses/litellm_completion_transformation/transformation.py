@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses.namespace_tool_param import NamespaceToolParam
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -20,6 +21,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
 )
 from litellm.types.llms.openai import (
+    ALL_RESPONSES_API_TOOL_PARAMS,
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
@@ -77,6 +79,9 @@ class ChatCompletionSession(TypedDict, total=False):
         ]
     ]
     litellm_session_id: Optional[str]
+
+
+NamespaceToolMap = dict[str, tuple[str, str]]
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -1122,7 +1127,10 @@ class LiteLLMCompletionResponsesConfig:
             id=function_call.get("call_id") or function_call.get("id") or "",
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
-                name=function_call.get("name") or "",
+                name=LiteLLMCompletionResponsesConfig._codex_namespace_member_name(
+                    namespace=str(function_call.get("namespace") or ""),
+                    member_name=str(function_call.get("name") or ""),
+                ),
                 arguments=str(function_call.get("arguments") or ""),
             ),
             index=0,
@@ -1277,7 +1285,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
-        tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None,
     ) -> Tuple[
         List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
         Optional[OpenAIWebSearchOptions],
@@ -1290,7 +1298,9 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_tools: List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]] = []
         web_search_options: Optional[OpenAIWebSearchOptions] = None
         for tool in tools:
-            if tool.get("type") == "mcp":
+            if tool.get("type") == "namespace":
+                chat_completion_tools.extend(LiteLLMCompletionResponsesConfig._flatten_codex_namespace_tool(tool))
+            elif tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
                 _search_context_size: Literal["low", "medium", "high"] = cast(
@@ -1331,6 +1341,71 @@ class LiteLLMCompletionResponsesConfig:
             else:
                 chat_completion_tools.append(cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool))
         return chat_completion_tools, web_search_options
+
+    @staticmethod
+    def _codex_namespace_member_name(namespace: str, member_name: str) -> str:
+        if not namespace:
+            return member_name
+        separator = "" if namespace.endswith("__") else "__"
+        return f"{namespace}{separator}{member_name}"
+
+    @staticmethod
+    def _flatten_codex_namespace_tool(namespace_tool: NamespaceToolParam) -> list[ChatCompletionToolParam]:
+        namespace = namespace_tool.get("name") or ""
+        if not namespace:
+            raise ValueError("Codex namespace tool must have a name")
+
+        flattened_tools: list[ChatCompletionToolParam] = []
+        for member in namespace_tool.get("tools") or []:
+            if member.get("type") != "function":
+                continue
+            member_name_value = member.get("name")
+            if not isinstance(member_name_value, str) or not member_name_value:
+                raise ValueError(f"Codex namespace {namespace!r} contains a tool without a name")
+
+            description_value = member.get("description")
+            parameters_value = member.get("parameters")
+            parameters = dict(parameters_value) if isinstance(parameters_value, dict) else {"type": "object"}
+            if "type" not in parameters:
+                parameters["type"] = "object"
+
+            flattened_tools.append(
+                ChatCompletionToolParam(
+                    type="function",
+                    function={
+                        "name": LiteLLMCompletionResponsesConfig._codex_namespace_member_name(
+                            namespace=namespace,
+                            member_name=member_name_value,
+                        ),
+                        "description": description_value if isinstance(description_value, str) else "",
+                        "parameters": parameters,
+                        "strict": bool(member.get("strict", False)),
+                    },
+                )
+            )
+        return flattened_tools
+
+    @staticmethod
+    def codex_namespace_tool_map(
+        tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+    ) -> NamespaceToolMap:
+        namespace_map: NamespaceToolMap = {}
+        for tool in tools or []:
+            if tool.get("type") != "namespace":
+                continue
+            namespace = tool.get("name") or ""
+            for member in tool.get("tools") or []:
+                if member.get("type") != "function":
+                    continue
+                member_name = member.get("name")
+                if not namespace or not isinstance(member_name, str) or not member_name:
+                    continue
+                flattened_name = LiteLLMCompletionResponsesConfig._codex_namespace_member_name(
+                    namespace=namespace,
+                    member_name=member_name,
+                )
+                namespace_map[flattened_name] = (namespace, member_name)
+        return namespace_map
 
     @staticmethod
     def transform_chat_completion_tool_params_to_responses_api_tools(
@@ -1377,7 +1452,8 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
-    ) -> List[ResponseFunctionToolCall]:
+        namespace_tool_map: Optional[NamespaceToolMap] = None,
+    ) -> list[ResponseFunctionToolCall | OutputFunctionToolCall]:
         """
         Transform a Chat Completion tools into a Responses API tools
         """
@@ -1416,14 +1492,28 @@ class LiteLLMCompletionResponsesConfig:
                             else {}
                         )
 
-                output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
-                    name=function_definition.name or "",
-                    arguments=function_definition.get("arguments") or "",
-                    call_id=tool.id or "",
-                    id=tool.id or "",
-                    type="function_call",  # critical this is "function_call" to work with tools like openai codex
-                    status=function_definition.get("status") or "completed",
-                )
+                function_name = function_definition.name or ""
+                namespace_identity = (namespace_tool_map or {}).get(function_name)
+                if namespace_identity is None:
+                    output_tool_call: ResponseFunctionToolCall = ResponseFunctionToolCall(
+                        name=function_name,
+                        arguments=function_definition.get("arguments") or "",
+                        call_id=tool.id or "",
+                        id=tool.id or "",
+                        type="function_call",  # critical this is "function_call" to work with tools like openai codex
+                        status=function_definition.get("status") or "completed",
+                    )
+                else:
+                    namespace, member_name = namespace_identity
+                    output_tool_call = OutputFunctionToolCall(
+                        name=member_name,
+                        namespace=namespace,
+                        arguments=function_definition.get("arguments") or "",
+                        call_id=tool.id or "",
+                        id=tool.id or "",
+                        type="function_call",
+                        status=function_definition.get("status") or "completed",
+                    )
 
                 # Pass through provider_specific_fields as-is if present
                 if provider_specific_fields:
@@ -1595,6 +1685,9 @@ class LiteLLMCompletionResponsesConfig:
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
+                namespace_tool_map=LiteLLMCompletionResponsesConfig.codex_namespace_tool_map(
+                    responses_api_request.get("tools")
+                ),
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
             temperature=getattr(chat_completion_response, "temperature", 0),
@@ -1627,6 +1720,7 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
+        namespace_tool_map: Optional[NamespaceToolMap] = None,
     ) -> List[
         Union[
             GenericResponseOutputItem,
@@ -1654,7 +1748,8 @@ class LiteLLMCompletionResponsesConfig:
         )
         responses_output.extend(
             LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
-                chat_completion_response=chat_completion_response
+                chat_completion_response=chat_completion_response,
+                namespace_tool_map=namespace_tool_map,
             )
         )
 

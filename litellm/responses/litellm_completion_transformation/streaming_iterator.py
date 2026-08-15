@@ -6,6 +6,7 @@ import litellm
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    NamespaceToolMap,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -100,6 +101,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_item_id: Optional[str] = None
         self._accumulated_reasoning_content_parts: List[str] = []
         self._accumulated_provider_specific_fields: Dict[str, Any] = {}
+        self._namespace_tool_map: NamespaceToolMap = LiteLLMCompletionResponsesConfig.codex_namespace_tool_map(
+            responses_api_request.get("tools")
+        )
+
+    def _namespace_identity_fields(self, function_name: str) -> dict[str, str]:
+        namespace_identity = self._namespace_tool_map.get(function_name)
+        if namespace_identity is None:
+            return {"name": function_name}
+        namespace, member_name = namespace_identity
+        return {"name": member_name, "namespace": namespace}
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
@@ -191,7 +202,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "type": "function_call",
                             "id": call_id,
                             "call_id": call_id,
-                            "name": fn_name,
+                            **self._namespace_identity_fields(fn_name),
                             "arguments": "",
                             "status": "in_progress",
                         }
@@ -268,7 +279,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "type": "function_call",
                             "id": call_id,
                             "call_id": call_id,
-                            "name": fn_name,
+                            **self._namespace_identity_fields(fn_name),
                             "arguments": "",
                             "status": "in_progress",
                         }
@@ -319,7 +330,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         "type": "function_call",
                         "id": call_id,
                         "call_id": call_id,
-                        "name": fn_name,
+                        **self._namespace_identity_fields(fn_name),
                         "arguments": final_args,
                         "status": "completed",
                     }

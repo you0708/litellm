@@ -683,6 +683,23 @@ class TestFunctionCallTransformation:
         assert function.get("name") == "get_weather"
         assert function.get("arguments") == '{"location": "São Paulo, Brazil"}'
 
+    def test_namespaced_function_call_transformation(self):
+        function_call_item = {
+            "type": "function_call",
+            "namespace": "mcp__ghidra__",
+            "name": "decompile_function",
+            "arguments": '{"address": "0x401000"}',
+            "call_id": "call_ghidra",
+            "status": "completed",
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=function_call_item
+        )
+
+        tool_call = result[0].get("tool_calls", [])[0]
+        assert tool_call.get("function", {}).get("name") == "mcp__ghidra__decompile_function"
+
     def test_complete_input_transformation_with_function_calls(self):
         """Test the complete transformation with the exact input from the issue"""
         test_input = [
@@ -1064,6 +1081,146 @@ class TestToolTransformation:
         assert result_tools[0] == mcp_tool
         assert result_tools[0]["type"] == "mcp"
         assert web_search_options is None
+
+    def test_transform_namespace_tools(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__ghidra__",
+            "description": "Ghidra tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "decompile_function",
+                    "description": "Decompile a function",
+                    "parameters": {
+                        "properties": {"address": {"type": "string"}},
+                        "required": ["address"],
+                    },
+                    "strict": True,
+                },
+                {
+                    "type": "function",
+                    "name": "list_functions",
+                    "description": "List functions",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            ],
+        }
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert web_search_options is None
+        assert [tool["function"]["name"] for tool in result_tools] == [
+            "mcp__ghidra__decompile_function",
+            "mcp__ghidra__list_functions",
+        ]
+        assert result_tools[0]["function"]["parameters"]["type"] == "object"
+        assert result_tools[0]["function"]["strict"] is True
+        assert result_tools[1]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {},
+        }
+
+    def test_restore_namespace_on_response_tool_call(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__ghidra__",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "decompile_function",
+                    "description": "Decompile a function",
+                    "parameters": {"type": "object"},
+                }
+            ],
+        }
+        chat_completion_response = ModelResponse(
+            id="response-id",
+            created=1234567890,
+            model="local-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_ghidra",
+                                type="function",
+                                function=Function(
+                                    name="mcp__ghidra__decompile_function",
+                                    arguments='{"address":"0x401000"}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Analyze the binary",
+            responses_api_request={"tools": [namespace_tool]},
+            chat_completion_response=chat_completion_response,
+        )
+
+        tool_call = next(item for item in response.output if item.type == "function_call")
+        assert tool_call.name == "decompile_function"
+        assert tool_call.namespace == "mcp__ghidra__"
+        assert tool_call.call_id == "call_ghidra"
+
+    def test_restore_namespace_on_streaming_tool_call(self):
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__ghidra__",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "decompile_function",
+                    "parameters": {"type": "object"},
+                }
+            ],
+        }
+        stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        stream_wrapper.logging_obj = Mock()
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="local-model",
+            litellm_custom_stream_wrapper=stream_wrapper,
+            request_input="Analyze the binary",
+            responses_api_request={"tools": [namespace_tool]},
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [
+                {
+                    "id": "call_ghidra",
+                    "index": 0,
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__ghidra__decompile_function",
+                        "arguments": "{}",
+                    },
+                }
+            ]
+        )
+
+        added_event = iterator._pending_tool_events[0]
+        assert added_event.item.name == "decompile_function"
+        assert added_event.item.namespace == "mcp__ghidra__"
 
     def test_transform_computer_use_tools(self):
         """Test that computer_use tools are passed through as-is"""
