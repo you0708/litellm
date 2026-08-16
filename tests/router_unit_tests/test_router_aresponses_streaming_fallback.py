@@ -90,6 +90,16 @@ def test_extract_partial_responses_usage_no_completed_response():
     assert usage is None
 
 
+def test_extract_partial_responses_usage_tolerates_iterator_without_field():
+    """Failure accounting must preserve the upstream error for bridge iterators."""
+
+    class _LegacyIterator:
+        pass
+
+    usage = Router._extract_partial_responses_usage(_LegacyIterator())  # type: ignore[arg-type]
+    assert usage is None
+
+
 # -------- _combine_responses_fallback_usage --------
 
 

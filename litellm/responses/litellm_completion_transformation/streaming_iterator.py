@@ -69,6 +69,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: List[Dict[str, Any]] = []
         self.finished: bool = False
+        # This adapter bypasses ResponsesAPIStreamingIterator.__init__, but
+        # Router's mid-stream fallback accounting expects every responses
+        # iterator to expose this field. Without it, a provider ReadTimeout is
+        # replaced by an AttributeError while LiteLLM is handling the failure.
+        self.completed_response: Optional[Any] = None
         self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False

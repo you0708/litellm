@@ -2127,7 +2127,10 @@ class Router:
         # Native path: completed_response is set only if RESPONSE_COMPLETED
         # arrived before the error (uncommon mid-stream but worth checking).
         # Already ResponseAPIUsage-shaped — return as-is.
-        completed = source_iterator.completed_response
+        # Third-party/bridge iterators may not run the base initializer. Usage
+        # recovery is best-effort and must never replace the upstream stream
+        # error with an AttributeError.
+        completed = getattr(source_iterator, "completed_response", None)
         if isinstance(
             completed,
             (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
