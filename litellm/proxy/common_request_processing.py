@@ -95,6 +95,15 @@ def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> Non
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 
 
+def _mapping_value(container: dict, key: str) -> dict[str, object]:
+    """Return a writable mapping even when callers supplied null or a scalar."""
+    value = container.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        container[key] = value
+    return value
+
+
 async def _record_streaming_client_disconnect_if_needed(
     request: Request | None,
     request_data: dict,
@@ -112,13 +121,17 @@ async def _record_streaming_client_disconnect_if_needed(
 
     logging_obj = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
-        litellm_params = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
-        _apply_client_disconnect_metadata(logging_obj.model_call_details.setdefault("metadata", {}))
+        litellm_params = _mapping_value(
+            logging_obj.model_call_details, "litellm_params"
+        )
+        _apply_client_disconnect_metadata(_mapping_value(litellm_params, "metadata"))
+        _apply_client_disconnect_metadata(
+            _mapping_value(logging_obj.model_call_details, "metadata")
+        )
 
-    _apply_client_disconnect_metadata(request_data.setdefault("metadata", {}))
-    litellm_params = request_data.setdefault("litellm_params", {})
-    _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
+    _apply_client_disconnect_metadata(_mapping_value(request_data, "metadata"))
+    litellm_params = _mapping_value(request_data, "litellm_params")
+    _apply_client_disconnect_metadata(_mapping_value(litellm_params, "metadata"))
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
