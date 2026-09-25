@@ -1649,7 +1649,13 @@ class LiteLLMCompletionResponsesConfig:
             id=function_call.get("call_id") or function_call.get("id") or "",
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
-                name=f"{namespace}__{raw_name}" if qualify else raw_name,
+                name=(
+                    LiteLLMCompletionResponsesConfig._codex_namespace_member_name(
+                        namespace=str(namespace), member_name=str(raw_name)
+                    )
+                    if qualify
+                    else raw_name
+                ),
                 arguments=serialize_tool_call_arguments(raw_arguments),
             ),
             index=0,
@@ -1811,6 +1817,14 @@ class LiteLLMCompletionResponsesConfig:
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
     @staticmethod
+    def _codex_namespace_member_name(namespace: str, member_name: str) -> str:
+        """Qualify a namespace member without duplicating Codex's ``__`` suffix."""
+        if not namespace:
+            return member_name
+        separator: Final = "" if namespace.endswith("__") else "__"
+        return f"{namespace}{separator}{member_name}"
+
+    @staticmethod
     def _build_ns_chat_tool(
         namespace: str,
         namespace_description: str,
@@ -1836,7 +1850,9 @@ class LiteLLMCompletionResponsesConfig:
             if nested and namespace_description
             else raw_description
         )
-        chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
+        chat_tool_name: Final = (
+            LiteLLMCompletionResponsesConfig._codex_namespace_member_name(namespace, tool_name) if nested else tool_name
+        )
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
@@ -1881,7 +1897,9 @@ class LiteLLMCompletionResponsesConfig:
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
         flattened_namespace_names: Final = frozenset(
-            f"{(tool.get('name') or '')!s}__{(namespace_tool.get('name') or '')!s}"
+            LiteLLMCompletionResponsesConfig._codex_namespace_member_name(
+                str(tool.get("name") or ""), str(namespace_tool.get("name") or "")
+            )
             for tool in tools or ()
             if tool.get("type") == "namespace"
             for namespace_tools in (tool.get("tools"),)
@@ -2049,7 +2067,11 @@ class LiteLLMCompletionResponsesConfig:
             if tool_name not in top_level_function_names and unqualified_counts[tool_name] == 1
         )
         qualified_entries: Final = tuple(
-            (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
+            (
+                LiteLLMCompletionResponsesConfig._codex_namespace_member_name(namespace, tool_name),
+                (namespace, tool_name),
+            )
+            for namespace, tool_name in namespace_entries
         )
         return MappingProxyType(dict(qualified_entries + unambiguous_entries))
 

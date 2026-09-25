@@ -4406,6 +4406,37 @@ class TestStreamingClientDisconnectLogging:
         )
 
     @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_normalizes_none_litellm_params(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "litellm_params": None,
+            "metadata": None,
+        }
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "litellm_logging_obj": mock_logging_obj,
+            "metadata": None,
+            "litellm_params": {"metadata": None},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            None, request_data, client_disconnected=True
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
+        assert mock_logging_obj.model_call_details["metadata"]["client_disconnected"] is True
+        assert (
+            mock_logging_obj.model_call_details["litellm_params"]["metadata"]["client_disconnected"]
+            is True
+        )
+
+    @pytest.mark.asyncio
     async def test_record_streaming_client_disconnect_handles_none_request_data_metadata(self):
         from litellm.proxy.common_request_processing import (
             _record_streaming_client_disconnect_if_needed,

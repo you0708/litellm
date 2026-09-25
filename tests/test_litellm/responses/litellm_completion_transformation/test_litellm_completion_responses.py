@@ -816,8 +816,8 @@ class TestLiteLLMCompletionResponsesConfig:
                                 id=tool_call_id,
                                 type="function",
                                 function=Function(
-                                    name="collaboration__spawn_agent",
-                                    arguments='{"message":"hello"}',
+                                    name="mcp__ghidra__decompile_function",
+                                    arguments='{"address":"0x401000"}',
                                 ),
                             )
                         ],
@@ -828,16 +828,16 @@ class TestLiteLLMCompletionResponsesConfig:
 
         try:
             responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                request_input="Spawn an agent",
+                request_input="Decompile a function",
                 responses_api_request={
                     "tools": [
                         {
                             "type": "namespace",
-                            "name": "collaboration",
+                            "name": "mcp__ghidra__",
                             "tools": [
                                 {
                                     "type": "function",
-                                    "name": "spawn_agent",
+                                    "name": "decompile_function",
                                     "parameters": {
                                         "type": "object",
                                         "properties": {},
@@ -858,9 +858,9 @@ class TestLiteLLMCompletionResponsesConfig:
             if item.type == "function_call"
         ]
         assert len(tool_calls) == 1
-        assert tool_calls[0].name == "spawn_agent"
-        assert tool_calls[0].namespace == "collaboration"
-        assert tool_calls[0].arguments == '{"message":"hello"}'
+        assert tool_calls[0].name == "decompile_function"
+        assert tool_calls[0].namespace == "mcp__ghidra__"
+        assert tool_calls[0].arguments == '{"address":"0x401000"}'
 
     def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
         """A non-namespace function call must not gain a namespace attribute, matching
@@ -2240,7 +2240,7 @@ class TestToolTransformation:
         """Outbound chat payloads go through json.dumps, which rejects MappingProxyType."""
         namespace_tool = {
             "type": "namespace",
-            "name": "mcp__everything",
+            "name": "mcp__everything__",
             "description": "MCP tools",
             "tools": [
                 {
@@ -2269,7 +2269,7 @@ class TestToolTransformation:
             function_call={
                 "type": "function_call",
                 "name": "get_sum",
-                "namespace": "mcp__everything",
+                "namespace": "mcp__everything__",
                 "call_id": "call_1",
                 "arguments": '{"a": 21, "b": 21}',
             }
@@ -3579,11 +3579,11 @@ class TestEnsureOutputItemContentPartAdded:
             "tools": [
                 {
                     "type": "namespace",
-                    "name": "collaboration",
+                    "name": "mcp__ghidra__",
                     "tools": [
                         {
                             "type": "function",
-                            "name": "spawn_agent",
+                            "name": "decompile_function",
                             "parameters": {"type": "object", "properties": {}},
                         }
                     ],
@@ -3601,16 +3601,16 @@ class TestEnsureOutputItemContentPartAdded:
                     "index": 0,
                     "id": "call_1",
                     "function": {
-                        "name": "collaboration__spawn_agent",
-                        "arguments": '{"task_name":"input_test"}',
+                        "name": "mcp__ghidra__decompile_function",
+                        "arguments": '{"address":"0x401000"}',
                     },
                 }
             ]
         )
 
         added = iterator._pending_tool_events[0]
-        assert added.item.name == "spawn_agent"
-        assert added.item.namespace == "collaboration"
+        assert added.item.name == "decompile_function"
+        assert added.item.namespace == "mcp__ghidra__"
 
     def test_streaming_unqualified_namespace_tool_calls_restore_namespace(self):
         """A unique nested tool name without the namespace still maps back."""
